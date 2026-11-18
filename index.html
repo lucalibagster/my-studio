@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Studio</title>
+<style>
+:root{--bg:#faf9f6;--card:#fff;--text:#1f1e1c;--muted:#77746d;--accent:#6c47ff;--border:#e3dfd6;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#161618;--card:#202023;--text:#eee;--muted:#9a9aa2;--accent:#8b6dff;--border:#333338;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+.wrap{max-width:720px;margin:0 auto;padding:14px}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+h1{font-size:20px;margin:0}a{color:var(--muted);font-size:13px}
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+.tabs button{flex:1;padding:10px;border-radius:12px;border:1px solid var(--border);background:var(--card);color:var(--text);font:inherit}
+.tabs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.panel{display:none;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px}
+.panel.on{display:block}
+label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+textarea,input,select{width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--border);background:var(--bg);color:var(--text);font:inherit}
+textarea{min-height:90px;resize:vertical}
+.go{margin-top:12px;width:100%;padding:12px;border:0;border-radius:12px;background:var(--accent);color:#fff;font:inherit;font-weight:600}
+.go:disabled{opacity:.5}
+.hint{font-size:13px;color:var(--muted);margin:6px 0 0}
+.err{color:#d6453a;font-size:14px;margin-top:8px}
+.out{margin-top:14px;display:flex;flex-direction:column;gap:12px}
+.item{border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--bg)}
+.item img,.item video{width:100%;display:block}
+.item .meta{padding:8px 12px;font-size:13px;color:var(--muted);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.meta a,.btn{color:var(--accent);font-size:13px}
+.btn{background:none;border:1px solid var(--accent);border-radius:10px;padding:6px 10px;font:inherit;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header><h1>Studio</h1><a href="/logout">Log out</a></header>
+<div class="tabs"><button id="t-img" class="on">Pictures</button><button id="t-vid">Videos</button></div>
+
+<section class="panel on" id="p-img">
+  <label for="ip">Describe the picture</label>
+  <textarea id="ip" placeholder="A neon-lit street in Tokyo at night, rain, cinematic"></textarea>
+  <label for="ia">Shape</label>
+  <select id="ia"><option value="1:1">Square</option><option value="9:16">Tall (phone)</option><option value="16:9">Wide</option><option value="4:5">Portrait</option></select>
+  <button class="go" id="igo">Make picture</button>
+  <div class="err" id="ie"></div>
+  <div class="out" id="iout"></div>
+</section>
+
+<section class="panel" id="p-vid">
+  <label for="vs">Look and style (applied to every scene)</label>
+  <input id="vs" placeholder="Cinematic, warm light, 35mm film look">
+  <label for="vp">Your video idea</label>
+  <textarea id="vp" placeholder="One idea, and it becomes 4 parts (60 seconds).&#10;Or write one scene per line (up to 4)."></textarea>
+  <p class="hint" id="vh">4 scenes × 15 seconds = 60 seconds.</p>
+  <label for="va">Shape</label>
+  <select id="va"><option value="9:16">Tall (phone)</option><option value="16:9">Wide</option><option value="1:1">Square</option></select>
+  <button class="go" id="vgo">Make video</button>
+  <div class="err" id="ve"></div>
+  <div class="out" id="vout"></div>
+</section>
+</div>
+<script>
+(function(){
+  var $=function(i){return document.getElementById(i)};
+  function tab(on){['img','vid'].forEach(function(k){$('t-'+k).classList.toggle('on',k===on);$('p-'+k).classList.toggle('on',k===on)})}
+  $('t-img').onclick=function(){tab('img')};$('t-vid').onclick=function(){tab('vid')};
+  var sleep=function(ms){return new Promise(function(r){setTimeout(r,ms)})};
+
+  async function create(body,tries){
+    for(var i=0;i<(tries||6);i++){
+      var r=await fetch('/api/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(r.status===401){location.href='/login';throw new Error('auth')}
+      var j=await r.json();
+      if(r.ok)return j.id;
+      if(r.status===429){await sleep(8000);continue}
+      throw new Error(j.error||'Could not start.');
+    }
+    throw new Error('Too many requests. Wait a minute and try again.');
+  }
+  async function wait(id,onTick){
+    for(;;){
+      var r=await fetch('/api/status/'+id);
+      if(r.status===401){location.href='/login';throw new Error('auth')}
+      var j=await r.json();
+      if(!r.ok)throw new Error(j.error||'Status check failed.');
+      if(onTick)onTick(j.status);
+      if(j.status==='succeeded')return j.output;
+      if(j.status==='failed'||j.status==='canceled')throw new Error(j.error||'Generation failed.');
+      await sleep(3500);
+    }
+  }
+  function dl(u,name){return '/api/save?u='+encodeURIComponent(u)+'&name='+name}
+
+  /* Pictures */
+  $('igo').onclick=async function(){
+    var p=$('ip').value.trim();if(!p)return;
+    $('ie').textContent='';$('igo').disabled=true;$('igo').textContent='Making…';
+    try{
+      var id=await create({kind:'image',prompt:p,aspect:$('ia').value});
+      var out=await wait(id);
+      out.forEach(function(u,i){
+        var d=document.createElement('div');d.className='item';
+        d.innerHTML='<img alt=""><div class="meta"><span></span><a>Save</a></div>';
+        d.querySelector('img').src=u;d.querySelector('span').textContent=p.slice(0,60);
+        d.querySelector('a').href=dl(u,'picture-'+Date.now()+'-'+i+'.webp');
+        $('iout').prepend(d);
+      });
+    }catch(e){if(e.message!=='auth')$('ie').textContent=e.message}
+    $('igo').disabled=false;$('igo').textContent='Make picture';
+  };
+
+  /* Videos */
+  var parts=[' Opening shot, establishing the scene.',' The action builds, new camera angle.',' The key moment, the most dramatic part.',' Closing shot, a satisfying ending.'];
+  function scenes(){
+    var lines=$('vp').value.split('\n').map(function(s){return s.trim()}).filter(Boolean).slice(0,4);
+    if(lines.length===1)lines=parts.map(function(x){return lines[0]+x});
+    return lines;
+  }
+  $('vp').oninput=function(){
+    var n=Math.max(1,Math.min(4,$('vp').value.split('\n').filter(function(s){return s.trim()}).length));
+    if(n===1)n=4;
+    var d=Math.min(15,Math.floor(60/n));
+    $('vh').textContent=n+' scenes × '+d+' seconds = '+(n*d)+' seconds.';
+  };
+
+  $('vgo').onclick=async function(){
+    var sc=scenes();if(!sc.length)return;
+    var style=$('vs').value.trim(),dur=Math.min(15,Math.floor(60/sc.length));
+    $('ve').textContent='';$('vgo').disabled=true;$('vgo').textContent='Making… (takes a few minutes)';
+    var box=document.createElement('div');box.className='item';
+    box.innerHTML='<div class="meta"><span class="st"></span></div>';
+    $('vout').prepend(box);
+    var st=box.querySelector('.st'),state=sc.map(function(){return 'starting'});
+    function show(){st.textContent=state.map(function(s,i){return 'Scene '+(i+1)+': '+s}).join('  ·  ')}
+    show();
+    try{
+      var ids=[];
+      for(var i=0;i<sc.length;i++){
+        ids.push(await create({kind:'video',prompt:(style?style+'. ':'')+sc[i],duration:dur,aspect:$('va').value}));
+        if(i<sc.length-1)await sleep(1500);
+      }
+      var clips=await Promise.all(ids.map(function(id,i){
+        return wait(id,function(s){state[i]=s;show()}).then(function(o){return o[0]});
+      }));
+      box.innerHTML='<video controls playsinline></video><div class="meta"><span></span></div>';
+      var v=box.querySelector('video'),meta=box.querySelector('span'),k=0;
+      v.src=clips[0];v.onended=function(){if(k<clips.length-1){k++;v.src=clips[k];v.play()}};
+      meta.textContent=clips.length+' clips play back to back ('+(clips.length*dur)+'s). ';
+      var row=document.createElement('div');row.className='meta';
+      clips.forEach(function(u,i){var a=document.createElement('a');a.textContent='Save clip '+(i+1);a.href=dl(u,'clip-'+(i+1)+'.mp4');row.appendChild(a)});
+      var b=document.createElement('button');b.className='btn';b.textContent='Join into one video file';
+      b.onclick=async function(){
+        b.disabled=true;b.textContent='Joining…';
+        try{
+          var r=await fetch('/api/stitch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clips:clips})});
+          var j=await r.json();if(!r.ok)throw new Error(j.error);
+          v.onended=null;v.src=j.file;
+          var a=document.createElement('a');a.textContent='Save full video';a.href=j.file+'?dl=1';row.appendChild(a);
+          b.remove();
+        }catch(e){b.disabled=false;b.textContent='Join into one video file';$('ve').textContent=e.message}
+      };
+      row.appendChild(b);box.appendChild(row);
+    }catch(e){if(e.message!=='auth'){$('ve').textContent=e.message;box.remove()}}
+    $('vgo').disabled=false;$('vgo').textContent='Make video';
+  };
+})();
+</script>
+</body>
+</html>
